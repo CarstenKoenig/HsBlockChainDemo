@@ -32,12 +32,14 @@ type Hash = Digest SHA256
 -- represented here in reversed order to make
 -- adding blocks easier
 -- it's expected that the block always starts with the @genesis link
-data Chain block =
-  Chain [Link block]
+data Chain block = Chain
+  { links :: [Link block]
+  , difficulty :: Difficulty
+  }
   deriving (Generic, Eq)
 
 instance (ToJSON block, Show block) => Show (Chain block) where
-  show (Chain ls) = intercalate ", " $ map show $ reverse ls
+  show (Chain ls _) = intercalate ", " $ map show $ reverse ls
 
 instance ToJSON block => ToJSON (Chain block) where
   toEncoding = genericToEncoding defaultOptions
@@ -46,14 +48,14 @@ instance FromJSON block => FromJSON (Chain block)
 
 
 -- | empty Chain just consiting of the @genesis link
-empty :: ToJSON block => Chain block
-empty = Chain [genesis]
+empty :: ToJSON block => Difficulty -> Chain block
+empty dif = Chain [genesis dif] dif
 
 
 -- | adds a block to the chain, making sure the hashes line up
 addBlock :: ToJSON block => block -> Chain block -> Chain block
-addBlock !block (Chain ls@(h:_)) = Chain (newH:ls)
-  where newH = link (Just $ hash h) (Just block)
+addBlock !block (Chain ls@(!h:_) dif) = Chain (newH:ls) dif
+  where newH = mine dif (Just $ hash h) (Just block)
 
 
 -- | verifies the chain
@@ -61,18 +63,22 @@ addBlock !block (Chain ls@(h:_)) = Chain (newH:ls)
 -- @prefHash field of a link must equal the @hash of it's predecessor in the chain
 -- this is what a *Block-Chain* is all about
 verify :: ToJSON block => Chain block -> Bool
-verify (Chain ls) = isJust $ foldM checkLink Nothing $ reverse ls
+verify ch = isJust $ foldM checkLink Nothing $ reverse (links ch)
   where
     checkLink prevH cur
-      | prevH == prevHash cur && hashData prevH (block cur) == hash cur = Just (Just $ hash cur)
+      | prevH == prevHash cur
+        && hashData prevH (block cur) (nounce cur) == hash cur
+        && verifyPoW (difficulty ch) (hash cur)
+                  = Just (Just $ hash cur)
       | otherwise = Nothing
 
 
 -- | a Chain-Link
 data Link block = Link
-  { prevHash :: !(Maybe Hash)   -- | the assumed has of the links predecessor - this one is included in the @hash
-  , block    :: !(Maybe block)  -- | the data of the block - always non-@Nothing for all but the @genesis link
-  , hash     :: !Hash           -- | the hash of the link computed with @prevHash and @block
+  { prevHash :: !(Maybe Hash)    -- | the assumed has of the links predecessor - this one is included in the @hash
+  , block    :: !(Maybe block)   -- | the data of the block - always non-@Nothing for all but the @genesis link
+  , hash     :: !Hash            -- | the hash of the link computed with @prevHash and @block
+  , nounce   :: !Nounce          -- | Nounce for the proof-of-work
   } deriving (Generic, Eq)
 
 
@@ -97,13 +103,25 @@ instance forall a . SHA.HashAlgorithm a => FromJSON (Digest a) where
       Nothing -> error "could not read digest"
 
 
-hashData :: ToJSON block => Maybe Hash -> Maybe block -> Hash
-hashData p b = SHA.hash $ pack (show p) <> toStrict (encode b)
+hashData :: ToJSON block => Maybe Hash -> Maybe block -> Nounce -> Hash
+hashData p b n = SHA.hash $ pack (show p) <> toStrict (encode b) <> pack (show n)
 
 
-genesis :: ToJSON block => Link block
-genesis = link Nothing Nothing
+genesis :: ToJSON block => Difficulty -> Link block
+genesis dif = mine dif Nothing Nothing
 
 
-link :: ToJSON block => Maybe Hash -> Maybe block -> Link block
-link pH bl = Link pH bl (hashData pH bl)
+type Nounce = Integer
+type Difficulty = Int
+
+
+mine :: ToJSON block => Difficulty -> Maybe Hash -> Maybe block -> Link block
+mine dif !pH !bl = Link pH bl foundHash foundNounce
+  where
+    (foundHash, foundNounce) = head $ dropWhile (not . verifyPoW dif . fst) search
+    search = [ (hashData pH bl n, n) | n <- [0..] ]
+
+
+verifyPoW :: Difficulty -> Hash -> Bool
+verifyPoW dif hs = and $ zipWith (==) (replicate dif '0') (show hs)
+
