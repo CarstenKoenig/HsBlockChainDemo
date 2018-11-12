@@ -1,0 +1,24 @@
+name:                BlockChain
+version:             0.1.0.0
+#synopsis:
+#description:
+homepage:            https://github.com/CarstenKoenig/HsBlockChainDemo#readme
+license:             BSD3
+author:              Carsten König
+maintainer:          Carsten.Koenig@hotmail.de
+copyright:           (c) 2018 Carsten König
+category:            Your Projects Category
+extra-source-files:
+- README.md
+
+dependencies:
+  - base >= 4.7 && < 5
+  - aeson
+  - bytestring
+  - cryptonite
+  - memory
+
+executables:
+  BlockChain:
+    source-dirs:      src
+    main:             Main.hs
